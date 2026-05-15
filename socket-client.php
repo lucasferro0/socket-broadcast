@@ -1,16 +1,60 @@
 <?php
 
+require 'socket-constants.php';
+
+$operationSystem = PHP_OS_FAMILY;
+
+if ($operationSystem == 'Windows') {
+    exec('echo %USERNAME%', $output);
+    $username = $output[0] ?? 'unknown';
+    unset($output);
+    exec('hostname', $output);
+    $hostname = $output[0] ?? 'unknown';
+} else {
+    exec('whoami', $output);
+    $username = $output[0] ?? 'unknown';
+    unset($output);
+    exec('hostname', $output);
+    $hostname = $output[0] ?? 'unknown';
+}
+
+echo "Coletou dados do cliente: {$hostname} - {$username} - {$operationSystem}\n";
+
 $socket = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
 
 socket_connect($socket, '127.0.0.1', 4000);
 
+echo "Conectado ao socket server\n";
+
 while(true) {
     $response = socket_read($socket, 1024);
 
-    if($response === false) {
-        echo "Server has disconnected\n";
+    if ($response === false) {
+        $socketCode = socket_last_error($socket);
+
+        if (in_array($socketCode, [SOCKET_ERROR_NON_BLOCKING_OPERATION, SOCKET_SUCCESS_CONNECTION])) {
+            continue;
+        }
+
+        echo socket_strerror($socketCode);
+
         break;
     }
 
-    echo $response;
+    if ($response == 'GET_INFO_CLIENT') {
+        $info = json_encode([
+            'hostname' => $hostname,
+            'username' => $username,
+            'operationSystem' => $operationSystem
+        ]);
+        
+        $result = socket_write($socket, "GET_INFO_CLIENT:{$info}");
+
+        echo "Enviou dados do cliente para o servidor: {$result}\n";
+    }
+
+    if (strpos($response, 'DATA_EVENT:') !== false) {
+
+        echo "Recebeu evento: {$response}\n";
+    }
 }

@@ -1,5 +1,7 @@
 <?php
 
+require 'error-handler.php';
+require 'register-shutdown-function.php';
 require 'socket-constants.php';
 
 $clients = array();
@@ -31,22 +33,31 @@ while(true) {
 
         echo "Client added to clients array\n";
 
-        $result = socket_write($newSocket, "GET_INFO_CLIENT");
-
-        echo "Solicitou informações do cliente: {$result}\n";
-
         var_dump("Clientes:\n");
         var_dump($clients);
     }
 
     foreach($clients as $key => &$client) {
-        $data = socket_read($client['socket'], 1024);
+        try {
+            $data = socket_read($client['socket'], 1024);
+        } catch (ErrorException $e) {
+            $clientIp = $client['ip'];
+            $clientPort = $client['port'];
+
+            echo "Client [$key] {$clientIp}:{$clientPort}\n";
+            echo $e->getMessage() . PHP_EOL;
+
+            unset($clients[$key]);
+
+            continue;
+        }
 
         if ($data === false) {
             $socketCode = socket_last_error($socket);
 
-            var_dump($socketCode);
-            var_dump(socket_strerror($socketCode));
+            // var_dump($socketCode);
+            // var_dump(socket_strerror($socketCode));
+            // var_dump($data);
 
             if (! in_array($socketCode, [SOCKET_ERROR_NON_BLOCKING_OPERATION, SOCKET_SUCCESS_CONNECTION])) {
                 $clientIp = $client['ip'];
@@ -77,7 +88,60 @@ while(true) {
         if (strpos($data, 'POST /api/v1/events HTTP') !== false) {
             $dados = explode(PHP_EOL, $data);
 
-            $requestBody = json_decode($dados[6], true);
+            $requestBody = json_decode($dados[count($dados) - 1], true);
+
+            if (! is_array($requestBody)) {
+                $text = <<<TEXT
+                HTTP/1.1 400 Bad Request
+                Content-Type: application/json
+                Content-Length: 35
+                
+                {"message":"Invalid request body."}
+                TEXT;
+
+                socket_write($client['socket'], $text);
+
+                unset($clients[$key]);
+                
+                socket_close($client['socket']);
+                
+                continue;
+            }
+
+            if (! array_key_exists('event', $requestBody)) {
+                $text = <<<TEXT
+                HTTP/1.1 422 Unprocessable Entity
+                Content-Type: application/json
+                Content-Length: 38
+                
+                {"message":"event field is required."}
+                TEXT;
+                
+                socket_write($client['socket'], $text);
+
+                unset($clients[$key]);
+                
+                socket_close($client['socket']);
+                
+                continue;
+            }
+
+            if (! array_key_exists('channel', $requestBody)) {
+                $text = <<<TEXT
+                HTTP/1.1 422 Unprocessable Entity
+                Content-Type: application/json
+                Content-Length: 40
+                
+                {"message":"channel field is required."}
+                TEXT;
+                socket_write($client['socket'], $text);
+
+                unset($clients[$key]);
+                
+                socket_close($client['socket']);
+                
+                continue;
+            }
 
             $message = json_encode([
                 'event' => $requestBody['event'], 
@@ -89,12 +153,12 @@ while(true) {
             foreach($clients as $key2 => $client2) {
 
                 $text = <<<TEXT
-                    HTTP/1.1 200 OK
-                    Content-Type: application/json
-                    Content-Length: 40
-
-                    {"message":"Evento enviado com sucesso"}
-TEXT;
+                HTTP/1.1 200 OK
+                Content-Type: application/json
+                Content-Length: 40
+                
+                {"message":"Evento enviado com sucesso"}
+                TEXT;
 
                 if ($key2 == $key) {
                     $result = socket_write(
@@ -119,5 +183,44 @@ TEXT;
             }
         }
 
+        if (strpos($data, 'GET /api/v1/clients HTTP') !== false) {
+            $dados = explode(PHP_EOL, $data);
+
+            $clientsArray = array_map(function (array $value) {
+                if (
+                    ! array_key_exists('hostname', $value) 
+                    && ! array_key_exists('username', $value) 
+                    && ! array_key_exists('operationSystem', $value)) {
+                        return null;
+                }
+
+                return [
+                    'ip' => $value['ip'], 
+                    'port' => $value['port'], 
+                    'hostname' => $value['hostname'] ?? 'unknown', 
+                    'username' => $value['username'] ?? 'unknown', 
+                    'operationSystem' => $value['operationSystem'] ?? 'unknown'
+                ];
+            }, $clients);
+
+            $responseBody = json_encode(array_values(array_filter($clientsArray)));
+            $contentLength = strlen($responseBody);
+
+            $text = <<<TEXT
+            HTTP/1.1 200 OK
+            Content-Type: application/json
+            Content-Length: {$contentLength}
+            
+            {$responseBody}
+            TEXT;
+            
+            socket_write($client['socket'], $text);
+
+            unset($clients[$key]);
+            
+            socket_close($client['socket']);
+
+            continue;
+        }
     }
 }

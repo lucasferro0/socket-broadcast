@@ -1,5 +1,7 @@
 <?php
 
+require 'error-handler.php';
+require 'register-shutdown-function.php';
 require 'socket-constants.php';
 
 $operationSystem = PHP_OS_FAMILY;
@@ -26,6 +28,16 @@ socket_connect($socket, '127.0.0.1', 4000);
 
 echo "Conectado ao socket server\n";
 
+$info = json_encode([
+    'hostname' => $hostname,
+    'username' => $username,
+    'operationSystem' => $operationSystem
+]);
+
+$result = socket_write($socket, "GET_INFO_CLIENT:{$info}");
+
+echo "Enviou dados do cliente para o servidor: {$result}\n";
+
 while(true) {
     $response = socket_read($socket, 1024);
 
@@ -39,18 +51,6 @@ while(true) {
         echo socket_strerror($socketCode);
 
         break;
-    }
-
-    if ($response == 'GET_INFO_CLIENT') {
-        $info = json_encode([
-            'hostname' => $hostname,
-            'username' => $username,
-            'operationSystem' => $operationSystem
-        ]);
-        
-        $result = socket_write($socket, "GET_INFO_CLIENT:{$info}");
-
-        echo "Enviou dados do cliente para o servidor: {$result}\n";
     }
 
     if (strpos($response, 'DATA_EVENT:') !== false) {
